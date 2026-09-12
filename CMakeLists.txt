@@ -54,7 +54,12 @@ FetchContent_Declare(SDL3
 )
 FetchContent_MakeAvailable(SDL3)
 
-add_library(rts_line_drawing src/editor/line_drawing.cpp src/editor/line_drawing.h)
+add_library(rts_line_drawing
+    src/editor/line_drawing.cpp src/editor/line_drawing.h
+    src/editor/scene.cpp src/editor/scene.h
+    src/editor/navigation.cpp src/editor/navigation.h
+    src/editor/canvas_view.h
+)
 target_link_libraries(rts_line_drawing PUBLIC rts_geometry)
 target_include_directories(rts_line_drawing PUBLIC src)
 target_compile_features(rts_line_drawing PUBLIC cxx_std_20)
@@ -114,3 +119,12 @@ foreach(target rts_line_drawing rts_line_drawing_tests)
     endif()
 endforeach()
 add_test(NAME rts_line_drawing_tests COMMAND rts_line_drawing_tests)
+
+add_executable(rts_scene_tests tests/scene_tests.cpp)
+target_link_libraries(rts_scene_tests PRIVATE rts_line_drawing)
+if(MSVC)
+    target_compile_options(rts_scene_tests PRIVATE /W4 /permissive- /EHsc)
+else()
+    target_compile_options(rts_scene_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME rts_scene_tests COMMAND rts_scene_tests)

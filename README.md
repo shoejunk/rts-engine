@@ -1,8 +1,8 @@
 RTS Engine
 ==========
 
-CDT constraint drawing
-----------------------
+CDT scene editor and Play mode
+------------------------------
 
 Run `run_debug.bat` (or `run_release.bat`) to build and open the drawing window.
 The first configure downloads [SDL3 3.4.16](https://github.com/libsdl-org/SDL/releases/tag/release-3.4.16)
@@ -20,36 +20,76 @@ separate graphics DLL needs to be installed. Its license is in
   Constraints (including the rectangular boundary) are thick cyan lines;
   unconstrained triangle edges are thin and faded. Small dots mark CDT vertices,
   including vertices created at intersections.
-- **Save:** click **Save** or press **Ctrl+S**, choose a filename in the native
-  Save dialog, and save all completed lines as CSV. The footer reports success,
-  cancellation, or failure. Finish or cancel an active drag before saving.
-- **Undo:** click **Undo** or press **Ctrl+Z** to remove the last line and rebuild
-  the triangulation, including removing its new endpoints and intersections.
+- **Units:** choose **Units**, set the new-unit **Radius** with **- / +** or
+  **[ / ]** (2-64 world units), then click to place solid circles. A preview
+  shows the next unit's size; red means it would overlap a wall/unit or leave
+  the map. Each placed unit retains its own radius. Choose **Lines** to draw
+  constraints again. Constraints that overlap placed units are rejected.
+- **Zoom:** the mouse wheel zooms in/out around the cursor, in Edit and Play.
+  **Fit Map** or **Home** restores the full-map view. Zoom is limited to 25-800%
+  of the fitted view and never changes scene coordinates or radii.
+- **Save:** **Save / Ctrl+S** writes the current scene to its remembered file.
+  The first Save opens a filename dialog. **Save As... / Ctrl+Shift+S** always
+  chooses another file and makes that the target for subsequent saves. Canceling
+  or failing Save As keeps the previous target. The window title shows the file
+  name and an asterisk for unsaved edits.
+- **Play:** **Play / Space** starts a preview and disables placement and Undo.
+  Left-drag a box to select units, click to select one, or hold **Shift** to add
+  to a selection. Right-click to move selected units, preserving their relative
+  destination offsets. Selected units have bright rings and display their routes.
+  **Stop / Space** returns to Edit and restores the original placed positions.
+- **Undo:** **Undo / Ctrl+Z** removes the last placement or constraint. Removing
+  a constraint also removes its new endpoints/intersections from the CDT.
 - **Cancel a drag:** press **Esc**. Switching away from the window also cancels
   an unfinished line.
 
-Each saved row contains the two `(x,y)` endpoint pairs, in drawing order:
+Scene files are versioned JSON containing all line endpoint pairs and each
+unit's position/radius. Save works in both modes and always saves the authored
+layout; runtime selections, routes and temporary Play positions are excluded.
+The default filename is `scene.json`. For example:
 
-```csv
-start_x,start_y,end_x,end_y
-100,80,300,240
-300,240,450,80
+```json
+{
+  "version": 1,
+  "width": 1200,
+  "height": 700,
+  "lines": [
+    {"start": [100, 80], "end": [300, 240]}
+  ],
+  "units": [
+    {"x": 500, "y": 300, "radius": 12},
+    {"x": 550, "y": 300, "radius": 24}
+  ]
+}
 ```
 
 Coordinates are in CDT units: the bounded map runs from `(0,0)` at the top-left
 to `(1200,700)` at the bottom-right, with x increasing rightward and y downward.
 The view fits this map to the window; resizing changes the display scale and
-keeps saved coordinates unchanged. CSV stores each accepted line's snapped
+keeps saved coordinates unchanged. The scene stores each accepted line's snapped
 endpoints, excluding the preview, automatic boundary and unconstrained edges.
 Crossings on the CDT grid split constraints automatically. Off-grid crossings,
 endpoints outside the map, and lines collapsed to one point are rejected with
 a footer message; the existing drawing and triangulation stay intact.
-Saving again replaces the selected file with the complete current drawing.
-Drawings stay in memory until the window closes; save before closing.
+Saving again replaces the selected file with the complete current scene.
+Scenes stay in memory until the window closes; save before closing. Loading
+saved scenes is not yet exposed in the editor. The legacy line-only CSV writer
+remains available through `LineDrawing::save` for existing callers.
+
+Movement uses fixed-point positions at 60 ticks/sec and a speed of 180 world
+units/sec. Routes search an 8-unit grid against the CDT's constrained edges,
+then remove unnecessary waypoints with swept-circle clearance checks. Radius
+is respected around walls and bounds. Blocked goals leave units stationary;
+the footer reports how many selected units received routes. Very narrow
+passages can be missed by the search grid. Units currently have no local
+avoidance against one another while moving.
 
 The `rts_line_drawing_tests` CTest target covers snapping and vertex reuse,
 constraint insertion/splitting, failed-insertion rollback, cancellation, undo,
 exact CSV output, non-ASCII filenames, decimal locales, and save failures.
+`rts_scene_tests` covers edit/play guards, unit radii, selection, formation
+commands, wall detours and blocked routes, deterministic movement, anchored
+zoom, scene serialization, and remembered Save/Save As targets.
 
 Deterministic math layer
 ------------------------
@@ -269,10 +309,11 @@ Reacquire triangle/edge contents and spans after successful mutations; reset
 invalidates all IDs. `locate` uses the full query precision, returns the first
 incident triangle for an edge/vertex hit, and returns `kInvalid` outside the map.
 
-This is map geometry infrastructure. Closed loops do not mark or remove their
-interiors, and there is no obstacle removal, radius clearance, collision sweep,
-or pathfinding policy yet. Point location and edge lookup currently scan the
-mesh; constraint transactions copy it. Batch map boundaries with `insert_polyline`
+This CDT core is map geometry infrastructure. Closed loops do not mark or remove
+their interiors, and the core does not provide obstacle removal, radius clearance,
+collision sweeps, or pathfinding. The editor's navigation layer adds circle
+clearance and routing against constrained edges. Point location and edge lookup
+currently scan the mesh; constraint transactions copy it. Batch map boundaries with `insert_polyline`
 and profile representative map sizes before using edits in a per-tick workload.
 
 `rts_cdt_tests` checks snapping, range failures and rollback, boundary and wall
