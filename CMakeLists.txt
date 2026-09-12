@@ -55,6 +55,7 @@ FetchContent_Declare(SDL3
 FetchContent_MakeAvailable(SDL3)
 
 add_library(rts_line_drawing src/editor/line_drawing.cpp src/editor/line_drawing.h)
+target_link_libraries(rts_line_drawing PUBLIC rts_geometry)
 target_include_directories(rts_line_drawing PUBLIC src)
 target_compile_features(rts_line_drawing PUBLIC cxx_std_20)
 

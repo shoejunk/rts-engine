@@ -1,8 +1,8 @@
 RTS Engine
 ==========
 
-2D line drawing
----------------
+CDT constraint drawing
+----------------------
 
 Run `run_debug.bat` (or `run_release.bat`) to build and open the drawing window.
 The first configure downloads [SDL3 3.4.16](https://github.com/libsdl-org/SDL/releases/tag/release-3.4.16)
@@ -12,11 +12,19 @@ separate graphics DLL needs to be installed. Its license is in
 `build/_deps/sdl3-src/LICENSE.txt` after configuring.
 
 - **Draw:** press the left mouse button on the canvas to set the start, drag
-  to preview the line, and release to set the end. Repeat to add more lines.
+  to preview the line, and release to add it as a CDT constraint. Endpoints snap
+  to existing CDT vertices within 10 screen pixels; elsewhere they snap to the
+  CDT's 1/16-unit grid and become new vertices when the line is committed.
+  A yellow marker shows the snapped point under the mouse.
+- **Triangulation:** the actual CDT edges update after every accepted line.
+  Constraints (including the rectangular boundary) are thick cyan lines;
+  unconstrained triangle edges are thin and faded. Small dots mark CDT vertices,
+  including vertices created at intersections.
 - **Save:** click **Save** or press **Ctrl+S**, choose a filename in the native
   Save dialog, and save all completed lines as CSV. The footer reports success,
   cancellation, or failure. Finish or cancel an active drag before saving.
-- **Undo:** click **Undo** or press **Ctrl+Z** to remove the last line.
+- **Undo:** click **Undo** or press **Ctrl+Z** to remove the last line and rebuild
+  the triangulation, including removing its new endpoints and intersections.
 - **Cancel a drag:** press **Esc**. Switching away from the window also cancels
   an unfinished line.
 
@@ -28,16 +36,20 @@ start_x,start_y,end_x,end_y
 300,240,450,80
 ```
 
-Coordinates are in canvas pixels: `(0,0)` is the top-left below the toolbar,
-with x increasing rightward and y downward. There is no grid snapping; the
-grid is a visual guide. Releasing outside the canvas preserves the actual
-endpoint (which may be negative). Resizing does not rescale stored lines.
-CSV preserves fractional coordinates and excludes the in-progress preview.
+Coordinates are in CDT units: the bounded map runs from `(0,0)` at the top-left
+to `(1200,700)` at the bottom-right, with x increasing rightward and y downward.
+The view fits this map to the window; resizing changes the display scale and
+keeps saved coordinates unchanged. CSV stores each accepted line's snapped
+endpoints, excluding the preview, automatic boundary and unconstrained edges.
+Crossings on the CDT grid split constraints automatically. Off-grid crossings,
+endpoints outside the map, and lines collapsed to one point are rejected with
+a footer message; the existing drawing and triangulation stay intact.
 Saving again replaces the selected file with the complete current drawing.
 Drawings stay in memory until the window closes; save before closing.
 
-The `rts_line_drawing_tests` CTest target covers endpoint capture, cancellation,
-undo, exact CSV output, non-ASCII filenames, decimal locales, and save failures.
+The `rts_line_drawing_tests` CTest target covers snapping and vertex reuse,
+constraint insertion/splitting, failed-insertion rollback, cancellation, undo,
+exact CSV output, non-ASCII filenames, decimal locales, and save failures.
 
 Deterministic math layer
 ------------------------
