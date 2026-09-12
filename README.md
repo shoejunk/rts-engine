@@ -1,6 +1,44 @@
 RTS Engine
 ==========
 
+2D line drawing
+---------------
+
+Run `run_debug.bat` (or `run_release.bat`) to build and open the drawing window.
+The first configure downloads [SDL3 3.4.16](https://github.com/libsdl-org/SDL/releases/tag/release-3.4.16)
+with a pinned SHA-256 hash. CMake 3.24+ and Visual Studio 2022 with the C++
+workload are required by the Windows scripts. SDL is linked statically, so no
+separate graphics DLL needs to be installed. Its license is in
+`build/_deps/sdl3-src/LICENSE.txt` after configuring.
+
+- **Draw:** press the left mouse button on the canvas to set the start, drag
+  to preview the line, and release to set the end. Repeat to add more lines.
+- **Save:** click **Save** or press **Ctrl+S**, choose a filename in the native
+  Save dialog, and save all completed lines as CSV. The footer reports success,
+  cancellation, or failure. Finish or cancel an active drag before saving.
+- **Undo:** click **Undo** or press **Ctrl+Z** to remove the last line.
+- **Cancel a drag:** press **Esc**. Switching away from the window also cancels
+  an unfinished line.
+
+Each saved row contains the two `(x,y)` endpoint pairs, in drawing order:
+
+```csv
+start_x,start_y,end_x,end_y
+100,80,300,240
+300,240,450,80
+```
+
+Coordinates are in canvas pixels: `(0,0)` is the top-left below the toolbar,
+with x increasing rightward and y downward. There is no grid snapping; the
+grid is a visual guide. Releasing outside the canvas preserves the actual
+endpoint (which may be negative). Resizing does not rescale stored lines.
+CSV preserves fractional coordinates and excludes the in-progress preview.
+Saving again replaces the selected file with the complete current drawing.
+Drawings stay in memory until the window closes; save before closing.
+
+The `rts_line_drawing_tests` CTest target covers endpoint capture, cancellation,
+undo, exact CSV output, non-ASCII filenames, decimal locales, and save failures.
+
 Deterministic math layer
 ------------------------
 
@@ -133,3 +171,103 @@ baselined for 1.17.14; changing `kFracBits` changes it by design.
 The math layer alone does not make a simulation deterministic. Still to watch:
 iteration order of hash containers, pointer-value comparisons, unstable sorts,
 uninitialised memory, and any `float` in simulation state.
+
+Coarse collision triangulation
+------------------------------
+
+`src/geometry/cdt.h` provides the header-only `rts::Cdt<GridFractionBits>`;
+link the CMake target `rts_geometry`. It incrementally triangulates a bounded
+rectangle, inserts points and constrained segments, and exposes CCW triangles
+with twin-edge adjacency and constraint flags. It follows the coarse-coordinate
+idea in [James Anhalt's CDT](https://github.com/jeaiii/ce/blob/main/lib/h/ce/cdt.h),
+with an independent implementation using our `Fixed` API and portable exact
+integer predicates.
+
+Collision precision is deliberately separate from simulation precision:
+
+| Type | Grid step | Fixed raw units per step |
+|------|-----------|--------------------------|
+| `Fixed` | 1/16384 unit | 1 |
+| `Cdt<>` / `Cdt<4>` (default) | 1/16 unit | 1024 |
+| `Cdt<2>` | 1/4 unit | 4096 |
+| `Cdt<0>` | 1 unit | 16384 |
+
+Choose the grid once for a map; it is not a per-point tolerance. Input points
+and map bounds snap to the nearest grid coordinate, ties away from zero.
+Vertices snapping to the same position share one vertex ID. This limits detail
+to the chosen grid without reducing the precision of unit movement. It does
+not simplify arbitrary collinear chains or guarantee a minimum passage width.
+Snapping can move a wall by up to half a grid step on each axis; author clearance
+against the snapped geometry.
+
+```cpp
+#include "geometry/cdt.h"
+using namespace rts;
+using namespace rts::literals;
+
+Cdt<> collision; // 1/16-unit collision grid
+auto error = collision.reset({-1024_fx, -1024_fx}, {1024_fx, 1024_fx});
+if (error != Cdt<>::Error::none) return;
+
+// Horizontal maps supply world x/z as the point's x/y coordinates.
+const std::array<CdtPoint, 4> building{{
+    {10_fx, 10_fx}, {18_fx, 10_fx}, {18_fx, 16_fx}, {10_fx, 16_fx}
+}};
+error = collision.insert_polyline(building, true);
+if (error != Cdt<>::Error::none) return;
+
+const auto face_id = collision.locate({4.125_fx, 5.25_fx});
+if (face_id != Cdt<>::kInvalid)
+{
+    const auto& face = collision.triangles()[face_id];
+    const CdtPoint a = collision.position(face.vertices[0]);
+    const bool wall = face.constrained(0);
+    const auto twin = face.twins[0];
+    // If twin != kInvalid: adjacent face = twin / 3, edge = twin % 3.
+    // Edge i runs vertices[i] -> vertices[(i + 1) % 3].
+}
+```
+
+`insert_point` returns an error, vertex ID and whether a new vertex was added.
+`insert_constraint(a, b)` accepts existing vertex IDs; `insert_edge(a, b)` accepts
+`CdtPoint` endpoints. `insert_polyline(points, closed)` batches segments in one
+transaction, discarding consecutive snapped duplicates and a repeated closing
+vertex. An entirely collapsed segment or loop reports `collapsed_constraint`.
+
+Existing vertices on a segment, T-junctions, and intersections on the chosen
+grid split constraints automatically. Overlapping constraints are idempotent;
+later point insertions preserve both halves of a split wall. A crossing between
+grid positions returns `off_grid_intersection`: resolve it in map authoring or
+choose a different grid. Constraint/polyline failures leave the whole mesh
+unchanged, including endpoints tentatively inserted by that operation.
+
+Bounds and coordinates that cannot be represented after snapping are rejected
+in both Debug and Release. Grid coordinates use `int32_t`, retaining the world
+range of `Fixed` (apart from its upper fractional tail when rounding would
+overflow). Orientation uses 64-bit intermediates; in-circle tests use a small
+portable 128-bit integer accumulator. Cocircular edges stay unchanged. Identical
+ordered inputs produce identical topology; different insertion orders can choose
+different valid diagonals in cocircular configurations. `GridFractionBits` may
+range from zero through `Fixed::kFracBits - 2`.
+
+The four rectangle corners are vertices 0-3, starting at lower left and going
+CCW; boundary edges are constrained. `vertices()` exposes the integer grid;
+use `position(id)` for `Fixed` world coordinates. Vertex IDs survive insertions.
+Reacquire triangle/edge contents and spans after successful mutations; reset
+invalidates all IDs. `locate` uses the full query precision, returns the first
+incident triangle for an edge/vertex hit, and returns `kInvalid` outside the map.
+
+This is map geometry infrastructure. Closed loops do not mark or remove their
+interiors, and there is no obstacle removal, radius clearance, collision sweep,
+or pathfinding policy yet. Point location and edge lookup currently scan the
+mesh; constraint transactions copy it. Batch map boundaries with `insert_polyline`
+and profile representative map sizes before using edits in a per-tick workload.
+
+`rts_cdt_tests` checks snapping, range failures and rollback, boundary and wall
+splits, collinear overlaps, nested/concave loops, skinny cells, randomized
+constraint insertion, and large-coordinate predicates. It independently checks
+positive areas, rectangle coverage, reciprocal twins, planar edges, and local
+Delaunay legality on small maps, plus topology agreement after large scaling
+and translation. A fixed workload pins the mesh fingerprint to
+`0x8F184EBD8BEA3EDB`, verified in MSVC Debug and Release. The same CTest commands
+above run both math and CDT suites.
